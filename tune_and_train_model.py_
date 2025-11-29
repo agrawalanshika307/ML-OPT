@@ -1,0 +1,107 @@
+import pandas as pd
+import lightgbm as lgb
+from sklearn.model_selection import train_test_split, RandomizedSearchCV
+from sklearn.metrics import mean_absolute_error, r2_score
+import joblib
+import os
+
+# --- 1. CONFIGURATION ---
+
+# --- For Google Colab ---
+# from google.colab import drive
+# drive.mount('/content/drive')
+
+# ❗ IMPORTANT: Update this path to the folder inside your Google Drive
+# where your data is and where you want to save the model.
+DRIVE_FOLDER_PATH = '/content/drive/MyDrive/Ml Project'
+# ------------------------
+
+# Construct full paths for data and model files
+DATA_FILE = os.path.join(DRIVE_FOLDER_PATH, 'consolidated_antenna_data.csv')
+TUNED_MODEL_FILENAME = os.path.join(DRIVE_FOLDER_PATH, 'lgbm_antenna_model_tuned.joblib')
+
+
+# --- 2. DATA LOADING & PREPARATION ---
+# First, check if the Google Drive folder exists
+if not os.path.isdir(DRIVE_FOLDER_PATH):
+    print(f"❌ ERROR: Google Drive folder not found at '{DRIVE_FOLDER_PATH}'")
+    print("Please make sure you have mounted your Google Drive and that this folder exists.")
+elif not os.path.exists(DATA_FILE):
+    print(f"❌ ERROR: Data file '{os.path.basename(DATA_FILE)}' not found inside your Drive folder.")
+    print(f"Please make sure the CSV file is located at: {DATA_FILE}")
+else:
+    print(f"✅ Loading data from Google Drive: '{DATA_FILE}'...")
+    df = pd.read_csv(DATA_FILE)
+
+    df['x'] = (50 - df['ws']) / 2
+    features = ['n', 'x', 'frequency']
+    target = 's_parameter'
+    X = df[features]
+    y = df[target]
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    print(f"\nData split into training ({len(X_train)} rows) and testing ({len(X_test)} rows) sets.")
+
+    # --- 3. HYPERPARAMETER TUNING SETUP ---
+    print("\nSetting up hyperparameter tuning with Randomized Search...")
+
+    # Define the grid of hyperparameters to search
+    # These ranges are a good starting point for LightGBM
+    param_distributions = {
+        'n_estimators': [500, 800, 1000, 1200, 1500],
+        'learning_rate': [0.01, 0.02, 0.05, 0.1],
+        'num_leaves': [20, 31, 40, 50, 60],
+        'max_depth': [-1, 10, 15, 20],
+        'reg_alpha': [0.0, 0.1, 0.5], # L1 regularization
+        'reg_lambda': [0.0, 0.1, 0.5] # L2 regularization
+    }
+
+    # Initialize a base model
+    lgbm = lgb.LGBMRegressor(objective='regression_l1', random_state=42)
+
+    # Set up the Randomized Search with 5-fold Cross-Validation
+    # n_iter sets how many different parameter combinations to try.
+    # A higher number is better but takes longer. 50 is a good balance.
+    random_search = RandomizedSearchCV(
+        estimator=lgbm,
+        param_distributions=param_distributions,
+        n_iter=50,
+        scoring='neg_mean_absolute_error', # We want to minimize MAE
+        cv=5, # 5-fold cross-validation
+        verbose=1,
+        n_jobs=-1, # Use all available CPU cores
+        random_state=42
+    )
+
+    # --- 4. RUNNING THE SEARCH ---
+    print("\nStarting the search... This may take several minutes.")
+    random_search.fit(X_train, y_train)
+    print("✅ Search complete.")
+
+    # --- 5. RESULTS OF THE SEARCH ---
+    print("\n--- HYPERPARAMETER TUNING RESULTS ---")
+    print(f"Best Hyperparameters Found: \n{random_search.best_params_}")
+    print(f"Best Cross-Validated MAE: {-random_search.best_score_:.4f} dB")
+    print("-------------------------------------")
+
+    # --- 6. TRAINING THE FINAL MODEL ---
+    print("\nTraining the final model using the best hyperparameters on the full training set...")
+    # The random_search object automatically retrains a final model on the whole
+    # training set using the best parameters it found.
+    best_model = random_search.best_estimator_
+
+    # --- 7. FINAL EVALUATION ON TEST SET ---
+    print("\nEvaluating the tuned model on the unseen test data...")
+    y_pred = best_model.predict(X_test)
+    final_mae = mean_absolute_error(y_test, y_pred)
+    final_r2 = r2_score(y_test, y_pred)
+
+    print("\n--- FINAL TUNED MODEL PERFORMANCE ---")
+    print(f"Mean Absolute Error (MAE): {final_mae:.4f} dB")
+    print(f"R-squared (R²) Score: {final_r2:.4f}")
+    print("-----------------------------------")
+
+    # --- 8. SAVING THE TUNED MODEL ---
+    joblib.dump(best_model, TUNED_MODEL_FILENAME)
+    print(f"\n✅ Final tuned model saved to file in your Google Drive:")
+    print(f"   '{TUNED_MODEL_FILENAME}'")

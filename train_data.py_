@@ -1,0 +1,114 @@
+import os
+import re
+import pandas as pd
+
+# --- 1. CONFIGURATION ---
+# IMPORTANT: You MUST update this path to the folder containing your simulation files.
+# Example for Windows: 'C:/Users/YourUser/Desktop/Antenna_Simulations'
+# Example for Mac/Linux: '/Users/youruser/Documents/Antenna_Simulations'
+folder_path = '/content/drive/MyDrive/anshika simulation result 14 sept'
+
+# You can change the name of the final output file if you wish.
+output_csv_filename = 'consolidated_antenna_data.csv'
+# ------------------------
+
+
+def process_simulation_files(data_folder, output_csv):
+    """
+    Scans a folder for simulation .txt files, processes them by reading BOTH
+    n and x values from the #Parameters line within the file content, and
+    consolidates the data into a single CSV file.
+
+    Args:
+        data_folder (str): The path to the folder containing the simulation files.
+        output_csv (str): The path and filename for the output CSV.
+    """
+
+    w_fixed = 50.0
+    all_simulation_data = []
+
+    print(f"Starting to process files in: '{data_folder}'")
+
+    # --- 2. FILE DISCOVERY & VALIDATION ---
+    if not os.path.isdir(data_folder):
+        print(f"\n❌ ERROR: The specified folder does not exist.")
+        print(f"Please check the 'folder_path' variable and make sure it points to a real folder.")
+        return
+
+    # --- 3. DATA EXTRACTION LOOP ---
+    for filename in sorted(os.listdir(data_folder)):
+        if filename.endswith(".txt"):
+            file_path = os.path.join(data_folder, filename)
+            print(f"  -> Processing file: {filename}")
+
+            # Open and read the file
+            with open(file_path, 'r') as f:
+                current_n_value = None
+                current_x_value = None
+
+                # --- 4. STATEFUL PARSING LOGIC ---
+                for line in f:
+                    line = line.strip()
+
+                    # If the line defines new parameters, update our current 'n' and 'x' values
+                    if line.startswith('#Parameters'):
+                        n_match = re.search(r'n=([\d.]+)', line)
+                        x_match = re.search(r'x=([\d.]+)', line)
+
+                        current_n_value = float(n_match.group(1)) if n_match else None
+                        current_x_value = float(x_match.group(1)) if x_match else None
+                        continue # Move to the next line
+
+                    # Ignore any other comment lines or header lines
+                    if line.startswith('#') or line.startswith('"') or not line:
+                        continue
+
+                    # If we have valid 'n' and 'x' values from a Parameters line,
+                    # this must be a data line.
+                    if current_n_value is not None and current_x_value is not None:
+                        process_data_line(line, current_n_value, current_x_value, w_fixed, all_simulation_data)
+
+    # --- 5. DATA CONSOLIDATION AND SAVING ---
+    if all_simulation_data:
+        df = pd.DataFrame(all_simulation_data)
+        df = df[['n', 'ws', 'frequency', 's_parameter']]
+        df.to_csv(output_csv, index=False)
+
+        print("\n" + "="*50)
+        print(f"✅ SUCCESS! All data has been processed.")
+        print(f"   Total data rows created: {len(df)}")
+        print(f"   Data saved to: {os.path.abspath(output_csv)}")
+        print("="*50)
+
+        print("\nPreview of the consolidated data:")
+        print(df.head())
+
+    else:
+        print("\n❌ WARNING: No data was extracted.")
+        print("Please check if the folder path is correct and if the files are formatted as expected.")
+
+def process_data_line(line, n_val, x_val, w_fixed, data_list):
+    """
+    Helper function to parse a single data line and append it to the master list.
+    """
+    try:
+        parts = re.split(r'\s+', line)
+        if len(parts) >= 2:
+            frequency = float(parts[0])
+            s_parameter = float(parts[1])
+            ws_value = w_fixed - (2 * x_val)
+
+            data_list.append({
+                'n': n_val,
+                'ws': ws_value,
+                'frequency': frequency,
+                's_parameter': s_parameter
+            })
+    except (ValueError, IndexError):
+        # Gracefully skip any malformed lines
+        pass
+
+# --- SCRIPT EXECUTION ---
+if __name__ == "__main__":
+    process_simulation_files(folder_path, output_csv_filename)
+
